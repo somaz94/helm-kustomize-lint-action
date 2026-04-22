@@ -1,0 +1,6 @@
+apiVersion: v2
+name: sample-chart
+description: Fixture chart used by helm-kustomize-lint-action CI
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

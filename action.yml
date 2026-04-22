@@ -1,0 +1,380 @@
+name: Helm Kustomize Lint Action
+description: Lint and render a Helm chart with yamllint, helm lint, helm template, and optional kubeconform, in one composite action.
+author: somaz94
+
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  chart_path:
+    description: "Path to the Helm chart directory (the one containing Chart.yaml), relative to 'working_directory'."
+    required: false
+    default: '.'
+  values_files:
+    description: "Multi-line list of values files (one path per line, relative to 'working_directory'). Empty means lint/template once with the chart's default values.yaml."
+    required: false
+    default: ''
+  helm_version:
+    description: "Helm version passed to azure/setup-helm. Use 'latest' (default) or a pinned tag such as 'v3.16.4'."
+    required: false
+    default: 'latest'
+  working_directory:
+    description: "Base directory to run all helm/yamllint/kubeconform commands from."
+    required: false
+    default: '.'
+  lint_strict:
+    description: "When 'true' (default), pass '--strict' to 'helm lint' so warnings are treated as errors."
+    required: false
+    default: 'true'
+  run_yamllint:
+    description: "When 'true' (default), run yamllint on Chart.yaml and values*.yaml before helm lint. Templates are skipped (they are Go-template, not plain YAML)."
+    required: false
+    default: 'true'
+  yamllint_config:
+    description: "Path to a yamllint config file (e.g., '.yamllint.yml'). Empty uses the built-in 'relaxed' profile which is tuned for Helm chart files."
+    required: false
+    default: ''
+  run_template:
+    description: "When 'true' (default), run 'helm template --debug' for each values file to catch rendering errors."
+    required: false
+    default: 'true'
+  run_kubeconform:
+    description: "When 'true', pipe 'helm template' output through kubeconform to validate rendered manifests against Kubernetes schemas. Opt-in (default 'false')."
+    required: false
+    default: 'false'
+  kubeconform_version:
+    description: "kubeconform release tag (e.g., 'v0.6.7'). Only used when 'run_kubeconform' is true."
+    required: false
+    default: 'v0.6.7'
+  kubeconform_schema_locations:
+    description: "Multi-line list of kubeconform '-schema-location' values. Use 'default' for the bundled Kubernetes schemas; add extra lines (e.g., datreeio CRD catalog URLs) for CRD coverage."
+    required: false
+    default: 'default'
+
+outputs:
+  lint_result:
+    description: "Result of the helm lint phase: 'success' when every chart/values combination lints cleanly, otherwise 'failure'."
+    value: ${{ steps.lint.outputs.lint_result }}
+  template_result:
+    description: "Result of the helm template phase: 'success', 'failure', or 'skipped' when 'run_template' is false."
+    value: ${{ steps.template.outputs.template_result }}
+  kubeconform_result:
+    description: "Result of the kubeconform phase: 'success', 'failure', or 'skipped' when 'run_kubeconform' is false."
+    value: ${{ steps.kubeconform.outputs.kubeconform_result }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        CHART_PATH: ${{ inputs.chart_path }}
+        VALUES_FILES: ${{ inputs.values_files }}
+        YAMLLINT_CONFIG: ${{ inputs.yamllint_config }}
+        RUN_YAMLLINT: ${{ inputs.run_yamllint }}
+        RUN_TEMPLATE: ${{ inputs.run_template }}
+        RUN_KUBECONFORM: ${{ inputs.run_kubeconform }}
+        KUBECONFORM_VERSION: ${{ inputs.kubeconform_version }}
+      run: |
+        set -euo pipefail
+        echo "::group::Validate inputs"
+
+        if [[ ! -d "$WORKING_DIRECTORY" ]]; then
+          echo "::error::working_directory '$WORKING_DIRECTORY' is not a directory"
+          exit 1
+        fi
+
+        CHART_FULL="$WORKING_DIRECTORY/$CHART_PATH"
+        if [[ ! -d "$CHART_FULL" ]]; then
+          echo "::error::chart_path '$CHART_FULL' is not a directory"
+          exit 1
+        fi
+        if [[ ! -f "$CHART_FULL/Chart.yaml" ]]; then
+          echo "::error::Chart.yaml not found under '$CHART_FULL'"
+          exit 1
+        fi
+
+        if [[ -n "${VALUES_FILES// }" ]]; then
+          while IFS= read -r vfile; do
+            vfile="${vfile#"${vfile%%[![:space:]]*}"}"
+            vfile="${vfile%"${vfile##*[![:space:]]}"}"
+            [[ -z "$vfile" ]] && continue
+            if [[ ! -f "$WORKING_DIRECTORY/$vfile" ]]; then
+              echo "::error::values file '$WORKING_DIRECTORY/$vfile' not found"
+              exit 1
+            fi
+          done <<< "$VALUES_FILES"
+        fi
+
+        if [[ "$RUN_YAMLLINT" == "true" && -n "${YAMLLINT_CONFIG// }" ]]; then
+          if [[ ! -f "$WORKING_DIRECTORY/$YAMLLINT_CONFIG" ]]; then
+            echo "::error::yamllint_config '$WORKING_DIRECTORY/$YAMLLINT_CONFIG' not found"
+            exit 1
+          fi
+        fi
+
+        if [[ "$RUN_KUBECONFORM" == "true" ]]; then
+          if ! [[ "$KUBECONFORM_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::kubeconform_version must look like 'v0.6.7', got '$KUBECONFORM_VERSION'"
+            exit 1
+          fi
+        fi
+
+        echo "working_directory=$WORKING_DIRECTORY"
+        echo "chart_path=$CHART_PATH"
+        echo "values_files=${VALUES_FILES:-<defaults>}"
+        echo "run_yamllint=$RUN_YAMLLINT"
+        echo "run_template=$RUN_TEMPLATE"
+        echo "run_kubeconform=$RUN_KUBECONFORM"
+        echo "::endgroup::"
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v5
+      with:
+        version: ${{ inputs.helm_version }}
+
+    - name: Run yamllint
+      if: inputs.run_yamllint == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        CHART_PATH: ${{ inputs.chart_path }}
+        YAMLLINT_CONFIG: ${{ inputs.yamllint_config }}
+      run: |
+        set -euo pipefail
+        echo "::group::Install yamllint"
+        python3 -m pip install --quiet --upgrade pip
+        python3 -m pip install --quiet yamllint
+        echo "::endgroup::"
+
+        TARGETS=()
+        if [[ -f "$CHART_PATH/Chart.yaml" ]]; then
+          TARGETS+=("$CHART_PATH/Chart.yaml")
+        fi
+        shopt -s nullglob
+        for f in "$CHART_PATH"/values*.yaml "$CHART_PATH"/values*.yml; do
+          TARGETS+=("$f")
+        done
+        shopt -u nullglob
+
+        if [[ ${#TARGETS[@]} -eq 0 ]]; then
+          echo "::notice::no yamllint targets found under '$CHART_PATH' (Chart.yaml + values*.yaml)"
+          exit 0
+        fi
+
+        if [[ -n "${YAMLLINT_CONFIG// }" ]]; then
+          echo "::group::yamllint -c $YAMLLINT_CONFIG ${TARGETS[*]}"
+          yamllint -c "$YAMLLINT_CONFIG" "${TARGETS[@]}"
+        else
+          echo "::group::yamllint -d relaxed ${TARGETS[*]}"
+          yamllint -d relaxed "${TARGETS[@]}"
+        fi
+        echo "::endgroup::"
+
+    - name: Helm lint
+      id: lint
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        CHART_PATH: ${{ inputs.chart_path }}
+        VALUES_FILES: ${{ inputs.values_files }}
+        LINT_STRICT: ${{ inputs.lint_strict }}
+      run: |
+        set +e
+        FLAGS=()
+        if [[ "$LINT_STRICT" == "true" ]]; then
+          FLAGS+=(--strict)
+        fi
+        RC=0
+        if [[ -z "${VALUES_FILES// }" ]]; then
+          echo "::group::helm lint $CHART_PATH"
+          helm lint "$CHART_PATH" "${FLAGS[@]}"
+          RC=$?
+          echo "::endgroup::"
+        else
+          while IFS= read -r vfile; do
+            vfile="${vfile#"${vfile%%[![:space:]]*}"}"
+            vfile="${vfile%"${vfile##*[![:space:]]}"}"
+            [[ -z "$vfile" ]] && continue
+            echo "::group::helm lint $CHART_PATH -f $vfile"
+            helm lint "$CHART_PATH" -f "$vfile" "${FLAGS[@]}"
+            RC_ONE=$?
+            echo "::endgroup::"
+            if [[ $RC_ONE -ne 0 ]]; then
+              RC=$RC_ONE
+            fi
+          done <<< "$VALUES_FILES"
+        fi
+        if [[ $RC -eq 0 ]]; then
+          echo "lint_result=success" >> "$GITHUB_OUTPUT"
+        else
+          echo "lint_result=failure" >> "$GITHUB_OUTPUT"
+        fi
+        exit $RC
+
+    - name: Helm template
+      id: template
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        CHART_PATH: ${{ inputs.chart_path }}
+        VALUES_FILES: ${{ inputs.values_files }}
+        RUN_TEMPLATE: ${{ inputs.run_template }}
+      run: |
+        set +e
+        if [[ "$RUN_TEMPLATE" != "true" ]]; then
+          echo "::notice::skipping helm template (run_template=$RUN_TEMPLATE)"
+          echo "template_result=skipped" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        RC=0
+        if [[ -z "${VALUES_FILES// }" ]]; then
+          echo "::group::helm template ci-render $CHART_PATH --debug"
+          helm template ci-render "$CHART_PATH" --debug >/dev/null
+          RC=$?
+          echo "::endgroup::"
+        else
+          while IFS= read -r vfile; do
+            vfile="${vfile#"${vfile%%[![:space:]]*}"}"
+            vfile="${vfile%"${vfile##*[![:space:]]}"}"
+            [[ -z "$vfile" ]] && continue
+            echo "::group::helm template ci-render $CHART_PATH -f $vfile --debug"
+            helm template ci-render "$CHART_PATH" -f "$vfile" --debug >/dev/null
+            RC_ONE=$?
+            echo "::endgroup::"
+            if [[ $RC_ONE -ne 0 ]]; then
+              RC=$RC_ONE
+            fi
+          done <<< "$VALUES_FILES"
+        fi
+        if [[ $RC -eq 0 ]]; then
+          echo "template_result=success" >> "$GITHUB_OUTPUT"
+        else
+          echo "template_result=failure" >> "$GITHUB_OUTPUT"
+        fi
+        exit $RC
+
+    - name: Kubeconform
+      id: kubeconform
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        CHART_PATH: ${{ inputs.chart_path }}
+        VALUES_FILES: ${{ inputs.values_files }}
+        RUN_KUBECONFORM: ${{ inputs.run_kubeconform }}
+        KUBECONFORM_VERSION: ${{ inputs.kubeconform_version }}
+        SCHEMA_LOCATIONS: ${{ inputs.kubeconform_schema_locations }}
+      run: |
+        set +e
+        if [[ "$RUN_KUBECONFORM" != "true" ]]; then
+          echo "::notice::skipping kubeconform (run_kubeconform=$RUN_KUBECONFORM)"
+          echo "kubeconform_result=skipped" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        set -e
+        echo "::group::Install kubeconform ($KUBECONFORM_VERSION)"
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64)  ARCH_TAG="amd64" ;;
+          aarch64|arm64) ARCH_TAG="arm64" ;;
+          *) echo "::error::unsupported arch '$ARCH'"; exit 1 ;;
+        esac
+        TMPDIR="$(mktemp -d)"
+        curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-${ARCH_TAG}.tar.gz" \
+          | tar -xz -C "$TMPDIR" kubeconform
+        sudo install -m 0755 "$TMPDIR/kubeconform" /usr/local/bin/kubeconform
+        kubeconform -v
+        echo "::endgroup::"
+        set +e
+
+        SCHEMA_ARGS=()
+        while IFS= read -r loc; do
+          loc="${loc#"${loc%%[![:space:]]*}"}"
+          loc="${loc%"${loc##*[![:space:]]}"}"
+          [[ -z "$loc" ]] && continue
+          SCHEMA_ARGS+=(-schema-location "$loc")
+        done <<< "$SCHEMA_LOCATIONS"
+        if [[ ${#SCHEMA_ARGS[@]} -eq 0 ]]; then
+          SCHEMA_ARGS=(-schema-location default)
+        fi
+
+        RC=0
+        run_one() {
+          local vfile="$1"
+          if [[ -z "$vfile" ]]; then
+            echo "::group::kubeconform $CHART_PATH (defaults)"
+            helm template ci-render "$CHART_PATH" \
+              | kubeconform -strict -ignore-missing-schemas -summary "${SCHEMA_ARGS[@]}"
+          else
+            echo "::group::kubeconform $CHART_PATH -f $vfile"
+            helm template ci-render "$CHART_PATH" -f "$vfile" \
+              | kubeconform -strict -ignore-missing-schemas -summary "${SCHEMA_ARGS[@]}"
+          fi
+          local rc=$?
+          echo "::endgroup::"
+          return $rc
+        }
+
+        if [[ -z "${VALUES_FILES// }" ]]; then
+          run_one ""
+          RC=$?
+        else
+          while IFS= read -r vfile; do
+            vfile="${vfile#"${vfile%%[![:space:]]*}"}"
+            vfile="${vfile%"${vfile##*[![:space:]]}"}"
+            [[ -z "$vfile" ]] && continue
+            run_one "$vfile"
+            RC_ONE=$?
+            if [[ $RC_ONE -ne 0 ]]; then
+              RC=$RC_ONE
+            fi
+          done <<< "$VALUES_FILES"
+        fi
+
+        if [[ $RC -eq 0 ]]; then
+          echo "kubeconform_result=success" >> "$GITHUB_OUTPUT"
+        else
+          echo "kubeconform_result=failure" >> "$GITHUB_OUTPUT"
+        fi
+        exit $RC
+
+    - name: Summary
+      if: always()
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        CHART_PATH: ${{ inputs.chart_path }}
+        VALUES_FILES: ${{ inputs.values_files }}
+        LINT_RESULT: ${{ steps.lint.outputs.lint_result }}
+        TEMPLATE_RESULT: ${{ steps.template.outputs.template_result }}
+        KUBECONFORM_RESULT: ${{ steps.kubeconform.outputs.kubeconform_result }}
+        RUN_YAMLLINT: ${{ inputs.run_yamllint }}
+        RUN_TEMPLATE: ${{ inputs.run_template }}
+        RUN_KUBECONFORM: ${{ inputs.run_kubeconform }}
+        LINT_STRICT: ${{ inputs.lint_strict }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${GITHUB_STEP_SUMMARY:-}" ]]; then
+          exit 0
+        fi
+        {
+          echo "### Helm Kustomize Lint"
+          echo ""
+          echo "| Field | Value |"
+          echo "|-------|-------|"
+          echo "| Working directory | \`${WORKING_DIRECTORY}\` |"
+          echo "| Chart path | \`${CHART_PATH}\` |"
+          if [[ -n "${VALUES_FILES// }" ]]; then
+            FILES_INLINE="$(echo "${VALUES_FILES}" | tr '\n' ',' | sed 's/,$//')"
+            echo "| Values files | \`${FILES_INLINE}\` |"
+          else
+            echo "| Values files | _(chart defaults)_ |"
+          fi
+          echo "| yamllint | \`${RUN_YAMLLINT}\` |"
+          echo "| helm lint (strict=${LINT_STRICT}) | \`${LINT_RESULT:-skipped}\` |"
+          echo "| helm template | \`${TEMPLATE_RESULT:-skipped}\` |"
+          echo "| kubeconform | \`${KUBECONFORM_RESULT:-skipped}\` |"
+        } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,4 @@
+extends: relaxed
+
+ignore: |
+  tests/fixtures/*/templates/

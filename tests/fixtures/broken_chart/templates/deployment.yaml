@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broken-chart
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: broken
+  template:
+    metadata:
+      labels:
+        app: broken
+    spec:
+      containers:
+        - name: main
+          # Intentional failure: references required() on a missing value.
+          image: "{{ required "image.repository is required (intentional fail for CI)" .Values.image.repository }}:latest"
+          ports:
+            - containerPort: 80

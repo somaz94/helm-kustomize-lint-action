@@ -1,0 +1,215 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install linters
+        run: |
+          python -m pip install --upgrade pip
+          pip install yamllint
+
+      - name: Run yamllint
+        run: yamllint action.yml .github/workflows/ tests/
+
+      - name: Run actionlint
+        uses: raven-actions/actionlint@v2
+        with:
+          cache: true
+
+  test-action:
+    name: Test Action (defaults, kubeconform skipped)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run action with defaults against fixture
+        id: lint
+        uses: ./
+        with:
+          working_directory: tests/fixtures/sample_chart
+
+      - name: Verify outputs
+        run: |
+          LINT='${{ steps.lint.outputs.lint_result }}'
+          TEMPLATE='${{ steps.lint.outputs.template_result }}'
+          KUBECONFORM='${{ steps.lint.outputs.kubeconform_result }}'
+          echo "lint_result=${LINT}"
+          echo "template_result=${TEMPLATE}"
+          echo "kubeconform_result=${KUBECONFORM}"
+          if [[ "${LINT}" != "success" ]]; then
+            echo "::error::expected lint_result='success', got '${LINT}'"
+            exit 1
+          fi
+          if [[ "${TEMPLATE}" != "success" ]]; then
+            echo "::error::expected template_result='success', got '${TEMPLATE}'"
+            exit 1
+          fi
+          if [[ "${KUBECONFORM}" != "skipped" ]]; then
+            echo "::error::expected kubeconform_result='skipped', got '${KUBECONFORM}'"
+            exit 1
+          fi
+          echo "[PASS] defaults"
+
+  test-action-multi-values:
+    name: Test Action (multi values_files + run_template=false)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run action with 2 values files and template disabled
+        id: lint
+        uses: ./
+        with:
+          working_directory: tests/fixtures/sample_chart
+          values_files: |
+            values.yaml
+            values-prod.yaml
+          run_template: 'false'
+
+      - name: Verify outputs
+        run: |
+          LINT='${{ steps.lint.outputs.lint_result }}'
+          TEMPLATE='${{ steps.lint.outputs.template_result }}'
+          KUBECONFORM='${{ steps.lint.outputs.kubeconform_result }}'
+          echo "lint_result=${LINT}"
+          echo "template_result=${TEMPLATE}"
+          echo "kubeconform_result=${KUBECONFORM}"
+          if [[ "${LINT}" != "success" ]]; then
+            echo "::error::expected lint_result='success', got '${LINT}'"
+            exit 1
+          fi
+          if [[ "${TEMPLATE}" != "skipped" ]]; then
+            echo "::error::expected template_result='skipped', got '${TEMPLATE}'"
+            exit 1
+          fi
+          if [[ "${KUBECONFORM}" != "skipped" ]]; then
+            echo "::error::expected kubeconform_result='skipped', got '${KUBECONFORM}'"
+            exit 1
+          fi
+          echo "[PASS] multi-values + template-skipped"
+
+  test-action-kubeconform:
+    name: Test Action (run_kubeconform=true + pinned helm_version)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run action with kubeconform opted in
+        id: lint
+        uses: ./
+        with:
+          working_directory: tests/fixtures/sample_chart
+          helm_version: v3.16.4
+          run_kubeconform: 'true'
+
+      - name: Verify outputs
+        run: |
+          LINT='${{ steps.lint.outputs.lint_result }}'
+          TEMPLATE='${{ steps.lint.outputs.template_result }}'
+          KUBECONFORM='${{ steps.lint.outputs.kubeconform_result }}'
+          echo "lint_result=${LINT}"
+          echo "template_result=${TEMPLATE}"
+          echo "kubeconform_result=${KUBECONFORM}"
+          if [[ "${LINT}" != "success" ]]; then
+            echo "::error::expected lint_result='success', got '${LINT}'"
+            exit 1
+          fi
+          if [[ "${TEMPLATE}" != "success" ]]; then
+            echo "::error::expected template_result='success', got '${TEMPLATE}'"
+            exit 1
+          fi
+          if [[ "${KUBECONFORM}" != "success" ]]; then
+            echo "::error::expected kubeconform_result='success', got '${KUBECONFORM}'"
+            exit 1
+          fi
+          echo "[PASS] kubeconform"
+
+  test-action-failure:
+    name: Test Action (failure path — broken_chart fails helm lint)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run action against a chart that fails helm lint
+        id: lint
+        uses: ./
+        continue-on-error: true
+        with:
+          working_directory: tests/fixtures/broken_chart
+          run_yamllint: 'false'
+
+      - name: Assert action failed and lint_result='failure'
+        run: |
+          OUTCOME='${{ steps.lint.outcome }}'
+          LINT='${{ steps.lint.outputs.lint_result }}'
+          echo "outcome=${OUTCOME}"
+          echo "lint_result=${LINT}"
+          if [[ "${OUTCOME}" != "failure" ]]; then
+            echo "::error::expected outcome='failure', got '${OUTCOME}'"
+            exit 1
+          fi
+          if [[ "${LINT}" != "failure" ]]; then
+            echo "::error::expected lint_result='failure', got '${LINT}'"
+            exit 1
+          fi
+          echo "[PASS] failure"
+
+  ci-result:
+    name: CI Result
+    if: always()
+    needs:
+      - lint
+      - test-action
+      - test-action-multi-values
+      - test-action-kubeconform
+      - test-action-failure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "::error::lint failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-action.result }}" != "success" ]]; then
+            echo "::error::test-action failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-action-multi-values.result }}" != "success" ]]; then
+            echo "::error::test-action-multi-values failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-action-kubeconform.result }}" != "success" ]]; then
+            echo "::error::test-action-kubeconform failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test-action-failure.result }}" != "success" ]]; then
+            echo "::error::test-action-failure failed"
+            exit 1
+          fi
+          echo "All CI jobs passed"

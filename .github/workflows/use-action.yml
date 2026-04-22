@@ -1,0 +1,95 @@
+name: Smoke Test (Released Action)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: 'workflow run'
+        required: true
+        default: 'true'
+  workflow_run:
+    workflows: ["Create release"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test-defaults:
+    name: Smoke Test (defaults)
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run released action against fixture (defaults)
+        id: lint
+        uses: somaz94/helm-kustomize-lint-action@v1
+        with:
+          working_directory: tests/fixtures/sample_chart
+
+      - name: Verify outputs
+        run: |
+          LINT='${{ steps.lint.outputs.lint_result }}'
+          TEMPLATE='${{ steps.lint.outputs.template_result }}'
+          KUBECONFORM='${{ steps.lint.outputs.kubeconform_result }}'
+          echo "lint_result=${LINT}"
+          echo "template_result=${TEMPLATE}"
+          echo "kubeconform_result=${KUBECONFORM}"
+          if [[ "${LINT}" != "success" ]]; then
+            echo "::error::expected lint_result='success', got '${LINT}'"
+            exit 1
+          fi
+          if [[ "${TEMPLATE}" != "success" ]]; then
+            echo "::error::expected template_result='success', got '${TEMPLATE}'"
+            exit 1
+          fi
+          if [[ "${KUBECONFORM}" != "skipped" ]]; then
+            echo "::error::expected kubeconform_result='skipped', got '${KUBECONFORM}'"
+            exit 1
+          fi
+          echo "[PASS] smoke — defaults"
+
+  smoke-test-kubeconform:
+    name: Smoke Test (run_kubeconform=true + multi values_files)
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run released action with kubeconform + multi values
+        id: lint
+        uses: somaz94/helm-kustomize-lint-action@v1
+        with:
+          working_directory: tests/fixtures/sample_chart
+          values_files: |
+            values.yaml
+            values-prod.yaml
+          run_kubeconform: 'true'
+
+      - name: Verify outputs
+        run: |
+          LINT='${{ steps.lint.outputs.lint_result }}'
+          TEMPLATE='${{ steps.lint.outputs.template_result }}'
+          KUBECONFORM='${{ steps.lint.outputs.kubeconform_result }}'
+          echo "lint_result=${LINT}"
+          echo "template_result=${TEMPLATE}"
+          echo "kubeconform_result=${KUBECONFORM}"
+          if [[ "${LINT}" != "success" ]]; then
+            echo "::error::expected lint_result='success', got '${LINT}'"
+            exit 1
+          fi
+          if [[ "${TEMPLATE}" != "success" ]]; then
+            echo "::error::expected template_result='success', got '${TEMPLATE}'"
+            exit 1
+          fi
+          if [[ "${KUBECONFORM}" != "success" ]]; then
+            echo "::error::expected kubeconform_result='success', got '${KUBECONFORM}'"
+            exit 1
+          fi
+          echo "[PASS] smoke — kubeconform + multi-values"

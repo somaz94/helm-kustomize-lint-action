@@ -1,0 +1,6 @@
+apiVersion: v2
+name: broken-chart
+description: Fixture chart that intentionally fails helm lint --strict (missing required field, undefined template call)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
