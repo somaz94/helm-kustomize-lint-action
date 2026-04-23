@@ -93,3 +93,70 @@ jobs:
             exit 1
           fi
           echo "[PASS] smoke — kubeconform + multi-values"
+
+  smoke-test-changed-charts:
+    name: Smoke Test (mode=changed-charts, chart-a bumped)
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up scratch monorepo with chart-a version bump
+        run: |
+          set -euo pipefail
+          SCRATCH="$RUNNER_TEMP/monorepo-changed"
+          mkdir -p "$SCRATCH"
+          cp -R tests/fixtures/monorepo/charts "$SCRATCH/"
+          cd "$SCRATCH"
+          git init -b main -q
+          git config user.email ci@example.com
+          git config user.name ci
+          git add -A
+          git commit -q -m "chore: baseline"
+          git clone --bare . "$SCRATCH.origin.git" -q
+          git remote add origin "$SCRATCH.origin.git"
+          git fetch origin -q
+          git remote set-url origin https://github.com/somaz94/helm-kustomize-lint-action.git
+          git checkout -q -b test/bump-chart-a
+          sed -i 's/^version: 0.1.0/version: 0.1.1/' charts/chart-a/Chart.yaml
+          git add -A
+          git commit -q -m "test: bump chart-a"
+
+      - name: Run released action in changed-charts mode
+        id: lint
+        uses: somaz94/helm-kustomize-lint-action@v1
+        with:
+          mode: changed-charts
+          working_directory: ${{ runner.temp }}/monorepo-changed
+          charts_dir: charts
+          base_ref: main
+
+      - name: Verify outputs
+        run: |
+          LINT='${{ steps.lint.outputs.lint_result }}'
+          TEMPLATE='${{ steps.lint.outputs.template_result }}'
+          KUBECONFORM='${{ steps.lint.outputs.kubeconform_result }}'
+          COUNT='${{ steps.lint.outputs.changed_charts_count }}'
+          echo "lint_result=${LINT}"
+          echo "template_result=${TEMPLATE}"
+          echo "kubeconform_result=${KUBECONFORM}"
+          echo "changed_charts_count=${COUNT}"
+          if [[ "${LINT}" != "success" ]]; then
+            echo "::error::expected lint_result='success', got '${LINT}'"
+            exit 1
+          fi
+          if [[ "${TEMPLATE}" != "success" ]]; then
+            echo "::error::expected template_result='success', got '${TEMPLATE}'"
+            exit 1
+          fi
+          if [[ "${KUBECONFORM}" != "skipped" ]]; then
+            echo "::error::expected kubeconform_result='skipped', got '${KUBECONFORM}'"
+            exit 1
+          fi
+          if [[ "${COUNT}" != "1" ]]; then
+            echo "::error::expected changed_charts_count='1', got '${COUNT}'"
+            exit 1
+          fi
+          echo "[PASS] smoke — changed-charts mode"
