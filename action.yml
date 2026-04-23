@@ -51,6 +51,26 @@ inputs:
     description: "Multi-line list of kubeconform '-schema-location' values. Use 'default' for the bundled Kubernetes schemas; add extra lines (e.g., datreeio CRD catalog URLs) for CRD coverage."
     required: false
     default: 'default'
+  mode:
+    description: "Operation mode. 'helm' (default) lints the chart at 'chart_path' with 'values_files'. 'changed-charts' runs 'ct list-changed' + 'ct lint' on charts changed under 'charts_dir' vs 'base_ref' (monorepo). The 'kustomize' mode is reserved for v1.2.0+."
+    required: false
+    default: 'helm'
+  base_ref:
+    description: "Target branch for 'ct list-changed --target-branch' in 'changed-charts' mode. Caller must run 'actions/checkout' with 'fetch-depth: 0' so the ref is available locally. Ignored in 'helm' mode."
+    required: false
+    default: 'main'
+  charts_dir:
+    description: "Monorepo charts directory passed to 'ct --chart-dirs' in 'changed-charts' mode. Relative to 'working_directory'. Ignored in 'helm' mode."
+    required: false
+    default: 'charts'
+  ct_version:
+    description: "chart-testing binary release tag (e.g., 'v3.11.0'). Downloaded from github.com/helm/chart-testing/releases. Only used in 'changed-charts' mode."
+    required: false
+    default: 'v3.11.0'
+  ct_check_version_increment:
+    description: "When 'true' (default), pass '--check-version-increment=true' to 'ct lint' so every changed chart must bump its Chart.yaml 'version'. Only used in 'changed-charts' mode."
+    required: false
+    default: 'true'
 
 outputs:
   lint_result:
@@ -62,6 +82,9 @@ outputs:
   kubeconform_result:
     description: "Result of the kubeconform phase: 'success', 'failure', or 'skipped' when 'run_kubeconform' is false."
     value: ${{ steps.kubeconform.outputs.kubeconform_result }}
+  changed_charts_count:
+    description: "Number of charts detected as changed in 'changed-charts' mode. Empty string in 'helm' mode (discover step does not run)."
+    value: ${{ steps.discover.outputs.count }}
 
 runs:
   using: composite
@@ -69,6 +92,7 @@ runs:
     - name: Validate inputs
       shell: bash
       env:
+        MODE: ${{ inputs.mode }}
         WORKING_DIRECTORY: ${{ inputs.working_directory }}
         CHART_PATH: ${{ inputs.chart_path }}
         VALUES_FILES: ${{ inputs.values_files }}
@@ -77,41 +101,82 @@ runs:
         RUN_TEMPLATE: ${{ inputs.run_template }}
         RUN_KUBECONFORM: ${{ inputs.run_kubeconform }}
         KUBECONFORM_VERSION: ${{ inputs.kubeconform_version }}
+        BASE_REF: ${{ inputs.base_ref }}
+        CHARTS_DIR: ${{ inputs.charts_dir }}
+        CT_VERSION: ${{ inputs.ct_version }}
       run: |
         set -euo pipefail
         echo "::group::Validate inputs"
+
+        case "$MODE" in
+          helm|changed-charts) ;;
+          *)
+            echo "::error::mode must be 'helm' or 'changed-charts', got '$MODE'"
+            exit 1
+            ;;
+        esac
 
         if [[ ! -d "$WORKING_DIRECTORY" ]]; then
           echo "::error::working_directory '$WORKING_DIRECTORY' is not a directory"
           exit 1
         fi
 
-        CHART_FULL="$WORKING_DIRECTORY/$CHART_PATH"
-        if [[ ! -d "$CHART_FULL" ]]; then
-          echo "::error::chart_path '$CHART_FULL' is not a directory"
-          exit 1
-        fi
-        if [[ ! -f "$CHART_FULL/Chart.yaml" ]]; then
-          echo "::error::Chart.yaml not found under '$CHART_FULL'"
-          exit 1
-        fi
+        if [[ "$MODE" == "helm" ]]; then
+          CHART_FULL="$WORKING_DIRECTORY/$CHART_PATH"
+          if [[ ! -d "$CHART_FULL" ]]; then
+            echo "::error::chart_path '$CHART_FULL' is not a directory"
+            exit 1
+          fi
+          if [[ ! -f "$CHART_FULL/Chart.yaml" ]]; then
+            echo "::error::Chart.yaml not found under '$CHART_FULL'"
+            exit 1
+          fi
 
-        if [[ -n "${VALUES_FILES// }" ]]; then
-          while IFS= read -r vfile; do
-            vfile="${vfile#"${vfile%%[![:space:]]*}"}"
-            vfile="${vfile%"${vfile##*[![:space:]]}"}"
-            [[ -z "$vfile" ]] && continue
-            if [[ ! -f "$WORKING_DIRECTORY/$vfile" ]]; then
-              echo "::error::values file '$WORKING_DIRECTORY/$vfile' not found"
+          if [[ -n "${VALUES_FILES// }" ]]; then
+            while IFS= read -r vfile; do
+              vfile="${vfile#"${vfile%%[![:space:]]*}"}"
+              vfile="${vfile%"${vfile##*[![:space:]]}"}"
+              [[ -z "$vfile" ]] && continue
+              if [[ ! -f "$WORKING_DIRECTORY/$vfile" ]]; then
+                echo "::error::values file '$WORKING_DIRECTORY/$vfile' not found"
+                exit 1
+              fi
+            done <<< "$VALUES_FILES"
+          fi
+
+          if [[ "$RUN_YAMLLINT" == "true" && -n "${YAMLLINT_CONFIG// }" ]]; then
+            if [[ ! -f "$WORKING_DIRECTORY/$YAMLLINT_CONFIG" ]]; then
+              echo "::error::yamllint_config '$WORKING_DIRECTORY/$YAMLLINT_CONFIG' not found"
               exit 1
             fi
-          done <<< "$VALUES_FILES"
-        fi
-
-        if [[ "$RUN_YAMLLINT" == "true" && -n "${YAMLLINT_CONFIG// }" ]]; then
-          if [[ ! -f "$WORKING_DIRECTORY/$YAMLLINT_CONFIG" ]]; then
-            echo "::error::yamllint_config '$WORKING_DIRECTORY/$YAMLLINT_CONFIG' not found"
+          fi
+        else
+          # changed-charts mode
+          if [[ -z "${BASE_REF// }" ]]; then
+            echo "::error::base_ref must be non-empty when mode='changed-charts'"
             exit 1
+          fi
+          if [[ -z "${CHARTS_DIR// }" ]]; then
+            echo "::error::charts_dir must be non-empty when mode='changed-charts'"
+            exit 1
+          fi
+          CHARTS_FULL="$WORKING_DIRECTORY/$CHARTS_DIR"
+          if [[ ! -d "$CHARTS_FULL" ]]; then
+            echo "::error::charts_dir '$CHARTS_FULL' is not a directory"
+            exit 1
+          fi
+          if ! [[ "$CT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::ct_version must look like 'v3.11.0', got '$CT_VERSION'"
+            exit 1
+          fi
+          if [[ -n "${CHART_PATH// }" && "$CHART_PATH" != "." ]]; then
+            echo "::notice::mode='changed-charts' ignores 'chart_path' (use 'charts_dir' instead)"
+          fi
+          if [[ -n "${VALUES_FILES// }" ]]; then
+            echo "::notice::mode='changed-charts' ignores 'values_files' (ct lints each chart with its own defaults)"
+          fi
+          if [[ "$RUN_YAMLLINT" == "true" ]]; then
+            echo "::notice::mode='changed-charts' ignores 'run_yamllint' (ct lint runs its own yamale/yamllint checks)"
           fi
         fi
 
@@ -122,10 +187,17 @@ runs:
           fi
         fi
 
+        echo "mode=$MODE"
         echo "working_directory=$WORKING_DIRECTORY"
-        echo "chart_path=$CHART_PATH"
-        echo "values_files=${VALUES_FILES:-<defaults>}"
-        echo "run_yamllint=$RUN_YAMLLINT"
+        if [[ "$MODE" == "helm" ]]; then
+          echo "chart_path=$CHART_PATH"
+          echo "values_files=${VALUES_FILES:-<defaults>}"
+          echo "run_yamllint=$RUN_YAMLLINT"
+        else
+          echo "base_ref=$BASE_REF"
+          echo "charts_dir=$CHARTS_DIR"
+          echo "ct_version=$CT_VERSION"
+        fi
         echo "run_template=$RUN_TEMPLATE"
         echo "run_kubeconform=$RUN_KUBECONFORM"
         echo "::endgroup::"
@@ -135,8 +207,64 @@ runs:
       with:
         version: ${{ inputs.helm_version }}
 
+    - name: Install chart-testing
+      if: inputs.mode == 'changed-charts'
+      shell: bash
+      env:
+        CT_VERSION: ${{ inputs.ct_version }}
+      run: |
+        set -euo pipefail
+        echo "::group::Install chart-testing ($CT_VERSION)"
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64)  ARCH_TAG="amd64" ;;
+          aarch64|arm64) ARCH_TAG="arm64" ;;
+          *) echo "::error::unsupported arch '$ARCH'"; exit 1 ;;
+        esac
+        TMPDIR="$(mktemp -d)"
+        VER_NO_V="${CT_VERSION#v}"
+        curl -fsSL "https://github.com/helm/chart-testing/releases/download/${CT_VERSION}/chart-testing_${VER_NO_V}_linux_${ARCH_TAG}.tar.gz" \
+          | tar -xz -C "$TMPDIR"
+        sudo install -m 0755 "$TMPDIR/ct" /usr/local/bin/ct
+        ct version
+        echo "::endgroup::"
+
+    - name: List changed charts
+      if: inputs.mode == 'changed-charts'
+      id: discover
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        BASE_REF: ${{ inputs.base_ref }}
+        CHARTS_DIR: ${{ inputs.charts_dir }}
+      run: |
+        set -euo pipefail
+        echo "::group::ct list-changed --target-branch $BASE_REF --chart-dirs $CHARTS_DIR"
+        CHANGED="$(ct list-changed --target-branch "$BASE_REF" --chart-dirs "$CHARTS_DIR" || true)"
+        echo "::endgroup::"
+        if [[ -z "${CHANGED// }" ]]; then
+          echo "::notice::No changed charts detected against '$BASE_REF'"
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          echo "count=0" >> "$GITHUB_OUTPUT"
+          {
+            echo "charts<<EOF"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        else
+          COUNT="$(printf '%s\n' "$CHANGED" | grep -c .)"
+          echo "Changed charts ($COUNT):"
+          printf '%s\n' "$CHANGED"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          {
+            echo "charts<<EOF"
+            printf '%s\n' "$CHANGED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Run yamllint
-      if: inputs.run_yamllint == 'true'
+      if: inputs.run_yamllint == 'true' && inputs.mode != 'changed-charts'
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
@@ -178,11 +306,36 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
+        MODE: ${{ inputs.mode }}
         CHART_PATH: ${{ inputs.chart_path }}
         VALUES_FILES: ${{ inputs.values_files }}
         LINT_STRICT: ${{ inputs.lint_strict }}
+        BASE_REF: ${{ inputs.base_ref }}
+        CHARTS_DIR: ${{ inputs.charts_dir }}
+        CT_CHECK_VERSION_INCREMENT: ${{ inputs.ct_check_version_increment }}
+        CHANGED: ${{ steps.discover.outputs.changed }}
       run: |
         set +e
+        if [[ "$MODE" == "changed-charts" ]]; then
+          if [[ "$CHANGED" != "true" ]]; then
+            echo "::notice::no changed charts — skipping ct lint"
+            echo "lint_result=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::group::ct lint --target-branch $BASE_REF --chart-dirs $CHARTS_DIR --check-version-increment=$CT_CHECK_VERSION_INCREMENT"
+          ct lint \
+            --target-branch "$BASE_REF" \
+            --chart-dirs "$CHARTS_DIR" \
+            --check-version-increment="$CT_CHECK_VERSION_INCREMENT"
+          RC=$?
+          echo "::endgroup::"
+          if [[ $RC -eq 0 ]]; then
+            echo "lint_result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "lint_result=failure" >> "$GITHUB_OUTPUT"
+          fi
+          exit $RC
+        fi
         FLAGS=()
         if [[ "$LINT_STRICT" == "true" ]]; then
           FLAGS+=(--strict)
@@ -219,15 +372,44 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
+        MODE: ${{ inputs.mode }}
         CHART_PATH: ${{ inputs.chart_path }}
         VALUES_FILES: ${{ inputs.values_files }}
         RUN_TEMPLATE: ${{ inputs.run_template }}
+        CHANGED: ${{ steps.discover.outputs.changed }}
+        CHANGED_CHARTS: ${{ steps.discover.outputs.charts }}
       run: |
         set +e
         if [[ "$RUN_TEMPLATE" != "true" ]]; then
           echo "::notice::skipping helm template (run_template=$RUN_TEMPLATE)"
           echo "template_result=skipped" >> "$GITHUB_OUTPUT"
           exit 0
+        fi
+        if [[ "$MODE" == "changed-charts" ]]; then
+          if [[ "$CHANGED" != "true" ]]; then
+            echo "::notice::no changed charts — skipping helm template"
+            echo "template_result=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RC=0
+          while IFS= read -r chart; do
+            chart="${chart#"${chart%%[![:space:]]*}"}"
+            chart="${chart%"${chart##*[![:space:]]}"}"
+            [[ -z "$chart" ]] && continue
+            echo "::group::helm template ci-render $chart --debug"
+            helm template ci-render "$chart" --debug >/dev/null
+            RC_ONE=$?
+            echo "::endgroup::"
+            if [[ $RC_ONE -ne 0 ]]; then
+              RC=$RC_ONE
+            fi
+          done <<< "$CHANGED_CHARTS"
+          if [[ $RC -eq 0 ]]; then
+            echo "template_result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "template_result=failure" >> "$GITHUB_OUTPUT"
+          fi
+          exit $RC
         fi
         RC=0
         if [[ -z "${VALUES_FILES// }" ]]; then
@@ -261,15 +443,23 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       env:
+        MODE: ${{ inputs.mode }}
         CHART_PATH: ${{ inputs.chart_path }}
         VALUES_FILES: ${{ inputs.values_files }}
         RUN_KUBECONFORM: ${{ inputs.run_kubeconform }}
         KUBECONFORM_VERSION: ${{ inputs.kubeconform_version }}
         SCHEMA_LOCATIONS: ${{ inputs.kubeconform_schema_locations }}
+        CHANGED: ${{ steps.discover.outputs.changed }}
+        CHANGED_CHARTS: ${{ steps.discover.outputs.charts }}
       run: |
         set +e
         if [[ "$RUN_KUBECONFORM" != "true" ]]; then
           echo "::notice::skipping kubeconform (run_kubeconform=$RUN_KUBECONFORM)"
+          echo "kubeconform_result=skipped" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [[ "$MODE" == "changed-charts" && "$CHANGED" != "true" ]]; then
+          echo "::notice::no changed charts — skipping kubeconform"
           echo "kubeconform_result=skipped" >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -299,6 +489,29 @@ runs:
         done <<< "$SCHEMA_LOCATIONS"
         if [[ ${#SCHEMA_ARGS[@]} -eq 0 ]]; then
           SCHEMA_ARGS=(-schema-location default)
+        fi
+
+        if [[ "$MODE" == "changed-charts" ]]; then
+          RC=0
+          while IFS= read -r chart; do
+            chart="${chart#"${chart%%[![:space:]]*}"}"
+            chart="${chart%"${chart##*[![:space:]]}"}"
+            [[ -z "$chart" ]] && continue
+            echo "::group::kubeconform $chart"
+            helm template ci-render "$chart" \
+              | kubeconform -strict -ignore-missing-schemas -summary "${SCHEMA_ARGS[@]}"
+            RC_ONE=$?
+            echo "::endgroup::"
+            if [[ $RC_ONE -ne 0 ]]; then
+              RC=$RC_ONE
+            fi
+          done <<< "$CHANGED_CHARTS"
+          if [[ $RC -eq 0 ]]; then
+            echo "kubeconform_result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "kubeconform_result=failure" >> "$GITHUB_OUTPUT"
+          fi
+          exit $RC
         fi
 
         RC=0
@@ -345,16 +558,23 @@ runs:
       if: always()
       shell: bash
       env:
+        MODE: ${{ inputs.mode }}
         WORKING_DIRECTORY: ${{ inputs.working_directory }}
         CHART_PATH: ${{ inputs.chart_path }}
         VALUES_FILES: ${{ inputs.values_files }}
+        BASE_REF: ${{ inputs.base_ref }}
+        CHARTS_DIR: ${{ inputs.charts_dir }}
         LINT_RESULT: ${{ steps.lint.outputs.lint_result }}
         TEMPLATE_RESULT: ${{ steps.template.outputs.template_result }}
         KUBECONFORM_RESULT: ${{ steps.kubeconform.outputs.kubeconform_result }}
+        CHANGED: ${{ steps.discover.outputs.changed }}
+        CHANGED_COUNT: ${{ steps.discover.outputs.count }}
+        CHANGED_CHARTS: ${{ steps.discover.outputs.charts }}
         RUN_YAMLLINT: ${{ inputs.run_yamllint }}
         RUN_TEMPLATE: ${{ inputs.run_template }}
         RUN_KUBECONFORM: ${{ inputs.run_kubeconform }}
         LINT_STRICT: ${{ inputs.lint_strict }}
+        CT_CHECK_VERSION_INCREMENT: ${{ inputs.ct_check_version_increment }}
       run: |
         set -euo pipefail
         if [[ -z "${GITHUB_STEP_SUMMARY:-}" ]]; then
@@ -365,16 +585,28 @@ runs:
           echo ""
           echo "| Field | Value |"
           echo "|-------|-------|"
+          echo "| Mode | \`${MODE}\` |"
           echo "| Working directory | \`${WORKING_DIRECTORY}\` |"
-          echo "| Chart path | \`${CHART_PATH}\` |"
-          if [[ -n "${VALUES_FILES// }" ]]; then
-            FILES_INLINE="$(echo "${VALUES_FILES}" | tr '\n' ',' | sed 's/,$//')"
-            echo "| Values files | \`${FILES_INLINE}\` |"
+          if [[ "$MODE" == "changed-charts" ]]; then
+            echo "| Charts dir | \`${CHARTS_DIR}\` |"
+            echo "| Base ref | \`${BASE_REF}\` |"
+            echo "| Changed charts | \`${CHANGED_COUNT:-0}\` |"
+            if [[ "${CHANGED:-}" == "true" ]]; then
+              FILES_INLINE="$(echo "${CHANGED_CHARTS}" | tr '\n' ',' | sed 's/,$//' | sed 's/^,//')"
+              echo "| Changed list | \`${FILES_INLINE}\` |"
+            fi
+            echo "| ct lint (version-increment=${CT_CHECK_VERSION_INCREMENT}) | \`${LINT_RESULT:-skipped}\` |"
           else
-            echo "| Values files | _(chart defaults)_ |"
+            echo "| Chart path | \`${CHART_PATH}\` |"
+            if [[ -n "${VALUES_FILES// }" ]]; then
+              FILES_INLINE="$(echo "${VALUES_FILES}" | tr '\n' ',' | sed 's/,$//')"
+              echo "| Values files | \`${FILES_INLINE}\` |"
+            else
+              echo "| Values files | _(chart defaults)_ |"
+            fi
+            echo "| yamllint | \`${RUN_YAMLLINT}\` |"
+            echo "| helm lint (strict=${LINT_STRICT}) | \`${LINT_RESULT:-skipped}\` |"
           fi
-          echo "| yamllint | \`${RUN_YAMLLINT}\` |"
-          echo "| helm lint (strict=${LINT_STRICT}) | \`${LINT_RESULT:-skipped}\` |"
           echo "| helm template | \`${TEMPLATE_RESULT:-skipped}\` |"
           echo "| kubeconform | \`${KUBECONFORM_RESULT:-skipped}\` |"
         } >> "$GITHUB_STEP_SUMMARY"

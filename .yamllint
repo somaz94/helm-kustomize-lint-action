@@ -2,3 +2,4 @@ extends: relaxed
 
 ignore: |
   tests/fixtures/*/templates/
+  tests/fixtures/monorepo/charts/*/templates/
