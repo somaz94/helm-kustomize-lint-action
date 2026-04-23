@@ -1,0 +1,9 @@
+apiVersion: v2
+name: chart-b
+description: Minimal fixture chart B (ConfigMap) for changed-charts mode tests.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+maintainers:
+  - name: somaz94
+    url: https://github.com/somaz94
