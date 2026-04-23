@@ -132,6 +132,7 @@ jobs:
           working_directory: ${{ runner.temp }}/monorepo-changed
           charts_dir: charts
           base_ref: main
+          helm_version: v3.16.4
 
       - name: Verify outputs
         run: |

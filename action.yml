@@ -226,6 +226,11 @@ runs:
         curl -fsSL "https://github.com/helm/chart-testing/releases/download/${CT_VERSION}/chart-testing_${VER_NO_V}_linux_${ARCH_TAG}.tar.gz" \
           | tar -xz -C "$TMPDIR"
         sudo install -m 0755 "$TMPDIR/ct" /usr/local/bin/ct
+        # ct loads chart_schema.yaml + lintconf.yaml from /etc/ct/ by default.
+        # The tarball ships these alongside the binary — they are NOT embedded.
+        sudo mkdir -p /etc/ct
+        sudo install -m 0644 "$TMPDIR/etc/chart_schema.yaml" /etc/ct/chart_schema.yaml
+        sudo install -m 0644 "$TMPDIR/etc/lintconf.yaml" /etc/ct/lintconf.yaml
         ct version
         echo "::endgroup::"
 
