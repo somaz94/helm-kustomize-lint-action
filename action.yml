@@ -231,7 +231,13 @@ runs:
         sudo mkdir -p /etc/ct
         sudo install -m 0644 "$TMPDIR/etc/chart_schema.yaml" /etc/ct/chart_schema.yaml
         sudo install -m 0644 "$TMPDIR/etc/lintconf.yaml" /etc/ct/lintconf.yaml
+        # ct shells out to `yamale` (Chart.yaml schema) and `yamllint` (lintconf) —
+        # they must be on PATH. GitHub-hosted runners ship python3/pip by default.
+        python3 -m pip install --quiet --upgrade pip
+        python3 -m pip install --quiet yamale yamllint
         ct version
+        yamale --version 2>&1 | head -1
+        yamllint --version
         echo "::endgroup::"
 
     - name: List changed charts
