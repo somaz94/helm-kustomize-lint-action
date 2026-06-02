@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.1](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.1.0...v1.1.1) (2026-06-02)
+
+### Bug Fixes
+
+- re-enable pipefail in kubeconform loop to unmask helm errors ([d6def8a](https://github.com/somaz94/helm-kustomize-lint-action/commit/d6def8a5271e137425042fb0ce0718c61fabdc71))
+
+### Continuous Integration
+
+- add concurrency guards to recurring workflows ([c1926ac](https://github.com/somaz94/helm-kustomize-lint-action/commit/c1926acdd11276661af51e3d749f5bdf255bf866))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v1.1.0](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.0.0...v1.1.0) (2026-04-23)
 
 ### Features
