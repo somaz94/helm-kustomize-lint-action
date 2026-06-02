@@ -223,8 +223,11 @@ runs:
         esac
         TMPDIR="$(mktemp -d)"
         VER_NO_V="${CT_VERSION#v}"
-        curl -fsSL "https://github.com/helm/chart-testing/releases/download/${CT_VERSION}/chart-testing_${VER_NO_V}_linux_${ARCH_TAG}.tar.gz" \
-          | tar -xz -C "$TMPDIR"
+        CT_URL="https://github.com/helm/chart-testing/releases/download/${CT_VERSION}/chart-testing_${VER_NO_V}_linux_${ARCH_TAG}.tar.gz"
+        if ! curl -fsSL "$CT_URL" | tar -xz -C "$TMPDIR"; then
+          echo "::error::failed to download/extract chart-testing from $CT_URL"
+          exit 1
+        fi
         sudo install -m 0755 "$TMPDIR/ct" /usr/local/bin/ct
         # ct loads chart_schema.yaml + lintconf.yaml from /etc/ct/ by default.
         # The tarball ships these alongside the binary — they are NOT embedded.
@@ -327,6 +330,7 @@ runs:
         CHANGED: ${{ steps.discover.outputs.changed }}
       run: |
         set +e
+        set -uo pipefail
         if [[ "$MODE" == "changed-charts" ]]; then
           if [[ "$CHANGED" != "true" ]]; then
             echo "::notice::no changed charts — skipping ct lint"
@@ -354,7 +358,7 @@ runs:
         RC=0
         if [[ -z "${VALUES_FILES// }" ]]; then
           echo "::group::helm lint $CHART_PATH"
-          helm lint "$CHART_PATH" "${FLAGS[@]}"
+          helm lint "$CHART_PATH" ${FLAGS[@]+"${FLAGS[@]}"}
           RC=$?
           echo "::endgroup::"
         else
@@ -363,7 +367,7 @@ runs:
             vfile="${vfile%"${vfile##*[![:space:]]}"}"
             [[ -z "$vfile" ]] && continue
             echo "::group::helm lint $CHART_PATH -f $vfile"
-            helm lint "$CHART_PATH" -f "$vfile" "${FLAGS[@]}"
+            helm lint "$CHART_PATH" -f "$vfile" ${FLAGS[@]+"${FLAGS[@]}"}
             RC_ONE=$?
             echo "::endgroup::"
             if [[ $RC_ONE -ne 0 ]]; then
@@ -391,6 +395,7 @@ runs:
         CHANGED_CHARTS: ${{ steps.discover.outputs.charts }}
       run: |
         set +e
+        set -uo pipefail
         if [[ "$RUN_TEMPLATE" != "true" ]]; then
           echo "::notice::skipping helm template (run_template=$RUN_TEMPLATE)"
           echo "template_result=skipped" >> "$GITHUB_OUTPUT"
@@ -464,6 +469,7 @@ runs:
         CHANGED_CHARTS: ${{ steps.discover.outputs.charts }}
       run: |
         set +e
+        set -uo pipefail
         if [[ "$RUN_KUBECONFORM" != "true" ]]; then
           echo "::notice::skipping kubeconform (run_kubeconform=$RUN_KUBECONFORM)"
           echo "kubeconform_result=skipped" >> "$GITHUB_OUTPUT"
@@ -476,20 +482,26 @@ runs:
         fi
 
         set -e
+        set -o pipefail
         echo "::group::Install kubeconform ($KUBECONFORM_VERSION)"
         ARCH="$(uname -m)"
         case "$ARCH" in
           x86_64)  ARCH_TAG="amd64" ;;
           aarch64|arm64) ARCH_TAG="arm64" ;;
-          *) echo "::error::unsupported arch '$ARCH'"; exit 1 ;;
+          *) echo "::error::unsupported arch '$ARCH'"; echo "kubeconform_result=failure" >> "$GITHUB_OUTPUT"; exit 1 ;;
         esac
         TMPDIR="$(mktemp -d)"
-        curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-${ARCH_TAG}.tar.gz" \
-          | tar -xz -C "$TMPDIR" kubeconform
-        sudo install -m 0755 "$TMPDIR/kubeconform" /usr/local/bin/kubeconform
+        KC_URL="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-${ARCH_TAG}.tar.gz"
+        if ! curl -fsSL "$KC_URL" | tar -xz -C "$TMPDIR" kubeconform \
+           || ! sudo install -m 0755 "$TMPDIR/kubeconform" /usr/local/bin/kubeconform; then
+          echo "::error::failed to install kubeconform $KUBECONFORM_VERSION from $KC_URL"
+          echo "kubeconform_result=failure" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
         kubeconform -v
         echo "::endgroup::"
         set +e
+        set -uo pipefail
 
         SCHEMA_ARGS=()
         while IFS= read -r loc; do
