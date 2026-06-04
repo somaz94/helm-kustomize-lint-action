@@ -215,6 +215,9 @@ runs:
       run: |
         set -euo pipefail
         echo "::group::Install chart-testing ($CT_VERSION)"
+        # NOTE: arch detection is duplicated in the Kubeconform step by design
+        # (composite steps cannot share shell functions); keep the two in sync.
+        # The copies differ only in error-path output handling.
         ARCH="$(uname -m)"
         case "$ARCH" in
           x86_64)  ARCH_TAG="amd64" ;;
@@ -236,6 +239,8 @@ runs:
         sudo install -m 0644 "$TMPDIR/etc/lintconf.yaml" /etc/ct/lintconf.yaml
         # ct shells out to `yamale` (Chart.yaml schema) and `yamllint` (lintconf) —
         # they must be on PATH. GitHub-hosted runners ship python3/pip by default.
+        # Mutually exclusive with the Run yamllint step's pip install: this
+        # step runs only in changed-charts mode, that step only in helm mode.
         python3 -m pip install --quiet --upgrade pip
         python3 -m pip install --quiet yamale yamllint
         ct version
@@ -286,6 +291,8 @@ runs:
         YAMLLINT_CONFIG: ${{ inputs.yamllint_config }}
       run: |
         set -euo pipefail
+        # Mutually exclusive with the Install chart-testing step's pip install:
+        # this step runs in helm mode, that step in changed-charts mode.
         echo "::group::Install yamllint"
         python3 -m pip install --quiet --upgrade pip
         python3 -m pip install --quiet yamllint
@@ -371,6 +378,7 @@ runs:
             RC_ONE=$?
             echo "::endgroup::"
             if [[ $RC_ONE -ne 0 ]]; then
+              echo "::error::helm lint failed for values file '$vfile'"
               RC=$RC_ONE
             fi
           done <<< "$VALUES_FILES"
@@ -417,6 +425,7 @@ runs:
             RC_ONE=$?
             echo "::endgroup::"
             if [[ $RC_ONE -ne 0 ]]; then
+              echo "::error::helm template failed for chart '$chart'"
               RC=$RC_ONE
             fi
           done <<< "$CHANGED_CHARTS"
@@ -443,6 +452,7 @@ runs:
             RC_ONE=$?
             echo "::endgroup::"
             if [[ $RC_ONE -ne 0 ]]; then
+              echo "::error::helm template failed for values file '$vfile'"
               RC=$RC_ONE
             fi
           done <<< "$VALUES_FILES"
@@ -484,6 +494,9 @@ runs:
         set -e
         set -o pipefail
         echo "::group::Install kubeconform ($KUBECONFORM_VERSION)"
+        # NOTE: arch detection is duplicated in the Install chart-testing step
+        # by design; composite steps cannot share shell functions. Keep synced.
+        # This copy must also write kubeconform_result before exiting.
         ARCH="$(uname -m)"
         case "$ARCH" in
           x86_64)  ARCH_TAG="amd64" ;;
@@ -522,10 +535,11 @@ runs:
             [[ -z "$chart" ]] && continue
             echo "::group::kubeconform $chart"
             helm template ci-render "$chart" \
-              | kubeconform -strict -ignore-missing-schemas -summary "${SCHEMA_ARGS[@]}"
+              | kubeconform -strict -ignore-missing-schemas -summary ${SCHEMA_ARGS[@]+"${SCHEMA_ARGS[@]}"}
             RC_ONE=$?
             echo "::endgroup::"
             if [[ $RC_ONE -ne 0 ]]; then
+              echo "::error::kubeconform failed for chart '$chart'"
               RC=$RC_ONE
             fi
           done <<< "$CHANGED_CHARTS"
@@ -543,11 +557,11 @@ runs:
           if [[ -z "$vfile" ]]; then
             echo "::group::kubeconform $CHART_PATH (defaults)"
             helm template ci-render "$CHART_PATH" \
-              | kubeconform -strict -ignore-missing-schemas -summary "${SCHEMA_ARGS[@]}"
+              | kubeconform -strict -ignore-missing-schemas -summary ${SCHEMA_ARGS[@]+"${SCHEMA_ARGS[@]}"}
           else
             echo "::group::kubeconform $CHART_PATH -f $vfile"
             helm template ci-render "$CHART_PATH" -f "$vfile" \
-              | kubeconform -strict -ignore-missing-schemas -summary "${SCHEMA_ARGS[@]}"
+              | kubeconform -strict -ignore-missing-schemas -summary ${SCHEMA_ARGS[@]+"${SCHEMA_ARGS[@]}"}
           fi
           local rc=$?
           echo "::endgroup::"
@@ -565,6 +579,7 @@ runs:
             run_one "$vfile"
             RC_ONE=$?
             if [[ $RC_ONE -ne 0 ]]; then
+              echo "::error::kubeconform failed for values file '$vfile'"
               RC=$RC_ONE
             fi
           done <<< "$VALUES_FILES"
@@ -615,7 +630,7 @@ runs:
             echo "| Base ref | \`${BASE_REF}\` |"
             echo "| Changed charts | \`${CHANGED_COUNT:-0}\` |"
             if [[ "${CHANGED:-}" == "true" ]]; then
-              FILES_INLINE="$(echo "${CHANGED_CHARTS}" | tr '\n' ',' | sed 's/,$//' | sed 's/^,//')"
+              FILES_INLINE="$(echo "${CHANGED_CHARTS:-}" | tr '\n' ',' | sed 's/,$//' | sed 's/^,//')"
               echo "| Changed list | \`${FILES_INLINE}\` |"
             fi
             echo "| ct lint (version-increment=${CT_CHECK_VERSION_INCREMENT}) | \`${LINT_RESULT:-skipped}\` |"
