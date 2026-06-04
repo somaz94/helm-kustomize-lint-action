@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.2](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.1.1...v1.1.2) (2026-06-04)
+
+### Code Refactoring
+
+- add loop-failure diagnostics and empty-array-safe expansion ([65e3857](https://github.com/somaz94/helm-kustomize-lint-action/commit/65e385772fed23e147d65500b2f1cce6cc53b590))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v1.1.1](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.1.0...v1.1.1) (2026-06-02)
 
 ### Bug Fixes
