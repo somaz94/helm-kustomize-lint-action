@@ -226,9 +226,27 @@ runs:
         esac
         TMPDIR="$(mktemp -d)"
         VER_NO_V="${CT_VERSION#v}"
-        CT_URL="https://github.com/helm/chart-testing/releases/download/${CT_VERSION}/chart-testing_${VER_NO_V}_linux_${ARCH_TAG}.tar.gz"
-        if ! curl -fsSL "$CT_URL" | tar -xz -C "$TMPDIR"; then
-          echo "::error::failed to download/extract chart-testing from $CT_URL"
+        CT_TGZ="chart-testing_${VER_NO_V}_linux_${ARCH_TAG}.tar.gz"
+        CT_BASE="https://github.com/helm/chart-testing/releases/download/${CT_VERSION}"
+        if ! curl -fsSL -o "$TMPDIR/$CT_TGZ" "$CT_BASE/$CT_TGZ"; then
+          echo "::error::failed to download chart-testing from $CT_BASE/$CT_TGZ"
+          exit 1
+        fi
+        # Verify the tarball sha256 against the release checksums.txt first.
+        # awk '$2 == f' is an exact-filename match; a substring grep would also
+        # hit the "<tarball>.sbom" line (same tarball name prefix).
+        if ! curl -fsSL -o "$TMPDIR/ct_checksums.txt" "$CT_BASE/checksums.txt"; then
+          echo "::error::failed to download chart-testing checksums.txt from $CT_BASE"
+          exit 1
+        fi
+        CT_EXPECTED="$(awk -v f="$CT_TGZ" '$2 == f {print $1}' "$TMPDIR/ct_checksums.txt")"
+        CT_ACTUAL="$(sha256sum "$TMPDIR/$CT_TGZ" | awk '{print $1}')"
+        if [[ -z "$CT_EXPECTED" || "$CT_EXPECTED" != "$CT_ACTUAL" ]]; then
+          echo "::error::chart-testing checksum mismatch for $CT_TGZ (expected '$CT_EXPECTED', got '$CT_ACTUAL')"
+          exit 1
+        fi
+        if ! tar -xzf "$TMPDIR/$CT_TGZ" -C "$TMPDIR"; then
+          echo "::error::failed to extract $CT_TGZ"
           exit 1
         fi
         sudo install -m 0755 "$TMPDIR/ct" /usr/local/bin/ct
@@ -522,10 +540,25 @@ runs:
           *) echo "::error::unsupported arch '$ARCH'"; echo "kubeconform_result=failure" >> "$GITHUB_OUTPUT"; exit 1 ;;
         esac
         TMPDIR="$(mktemp -d)"
-        KC_URL="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-${ARCH_TAG}.tar.gz"
-        if ! curl -fsSL "$KC_URL" | tar -xz -C "$TMPDIR" kubeconform \
+        KC_TGZ="kubeconform-linux-${ARCH_TAG}.tar.gz"
+        KC_BASE="https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}"
+        if ! curl -fsSL -o "$TMPDIR/$KC_TGZ" "$KC_BASE/$KC_TGZ" \
+           || ! curl -fsSL -o "$TMPDIR/CHECKSUMS" "$KC_BASE/CHECKSUMS"; then
+          echo "::error::failed to download kubeconform $KUBECONFORM_VERSION or its CHECKSUMS from $KC_BASE"
+          echo "kubeconform_result=failure" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        # Verify the tarball sha256 against the release CHECKSUMS first.
+        KC_EXPECTED="$(awk -v f="$KC_TGZ" '$2 == f {print $1}' "$TMPDIR/CHECKSUMS")"
+        KC_ACTUAL="$(sha256sum "$TMPDIR/$KC_TGZ" | awk '{print $1}')"
+        if [[ -z "$KC_EXPECTED" || "$KC_EXPECTED" != "$KC_ACTUAL" ]]; then
+          echo "::error::kubeconform checksum mismatch for $KC_TGZ (expected '$KC_EXPECTED', got '$KC_ACTUAL')"
+          echo "kubeconform_result=failure" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        if ! tar -xzf "$TMPDIR/$KC_TGZ" -C "$TMPDIR" kubeconform \
            || ! sudo install -m 0755 "$TMPDIR/kubeconform" /usr/local/bin/kubeconform; then
-          echo "::error::failed to install kubeconform $KUBECONFORM_VERSION from $KC_URL"
+          echo "::error::failed to extract/install kubeconform from $KC_TGZ"
           echo "kubeconform_result=failure" >> "$GITHUB_OUTPUT"
           exit 1
         fi
