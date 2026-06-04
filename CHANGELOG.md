@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.3](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.1.2...v1.1.3) (2026-06-04)
+
+### Bug Fixes
+
+- detect ct list-changed failures and guard ct schema install ([6852e71](https://github.com/somaz94/helm-kustomize-lint-action/commit/6852e71a7dedf96ee9341f4f1055422a53745b6d))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v1.1.2](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.1.1...v1.1.2) (2026-06-04)
 
 ### Code Refactoring
