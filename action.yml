@@ -235,6 +235,10 @@ runs:
         # ct loads chart_schema.yaml + lintconf.yaml from /etc/ct/ by default.
         # The tarball ships these alongside the binary — they are NOT embedded.
         sudo mkdir -p /etc/ct
+        if [[ ! -f "$TMPDIR/etc/chart_schema.yaml" || ! -f "$TMPDIR/etc/lintconf.yaml" ]]; then
+          echo "::error::ct $CT_VERSION tarball missing etc/chart_schema.yaml or etc/lintconf.yaml"
+          exit 1
+        fi
         sudo install -m 0644 "$TMPDIR/etc/chart_schema.yaml" /etc/ct/chart_schema.yaml
         sudo install -m 0644 "$TMPDIR/etc/lintconf.yaml" /etc/ct/lintconf.yaml
         # ct shells out to `yamale` (Chart.yaml schema) and `yamllint` (lintconf) —
@@ -259,8 +263,22 @@ runs:
       run: |
         set -euo pipefail
         echo "::group::ct list-changed --target-branch $BASE_REF --chart-dirs $CHARTS_DIR"
-        CHANGED="$(ct list-changed --target-branch "$BASE_REF" --chart-dirs "$CHARTS_DIR" || true)"
+        CT_ERR="$(mktemp)"
+        set +e
+        CHANGED="$(ct list-changed --target-branch "$BASE_REF" --chart-dirs "$CHARTS_DIR" 2>"$CT_ERR")"
+        CT_RC=$?
+        set -e
+        cat "$CT_ERR" >&2 || true
         echo "::endgroup::"
+        # Tell "no changed charts" (safe skip) apart from "ct failed to run":
+        # caller skipped fetch-depth: 0, or base_ref unreachable. Only a real
+        # failure writes a fatal/error/revision line to stderr.
+        if [[ $CT_RC -ne 0 ]] && grep -qiE 'fatal|error|unknown revision|does not exist' "$CT_ERR"; then
+          rm -f "$CT_ERR"
+          echo "::error::ct list-changed failed (rc=$CT_RC); ensure checkout used fetch-depth: 0 and base_ref '$BASE_REF' is reachable"
+          exit 1
+        fi
+        rm -f "$CT_ERR"
         if [[ -z "${CHANGED// }" ]]; then
           echo "::notice::No changed charts detected against '$BASE_REF'"
           echo "changed=false" >> "$GITHUB_OUTPUT"
