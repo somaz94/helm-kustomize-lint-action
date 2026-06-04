@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.4](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.1.3...v1.1.4) (2026-06-04)
+
+### Bug Fixes
+
+- verify ct and kubeconform download checksums before install ([3d009fd](https://github.com/somaz94/helm-kustomize-lint-action/commit/3d009fd6e8cf70116db5a6a76f694232664666fe))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v1.1.3](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.1.2...v1.1.3) (2026-06-04)
 
 ### Bug Fixes
