@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased (2026-06-25)
+
+### Continuous Integration
+
+- add DCO check via shared reusable workflow ([5074fa0](https://github.com/somaz94/helm-kustomize-lint-action/commit/5074fa048c8afcc0b0d8d1ac825f767b2ebfd8d2))
+
+### Chores
+
+- **deps:** bump actions/checkout from 6 to 7 (#1) ([#1](https://github.com/somaz94/helm-kustomize-lint-action/pull/1)) ([ad6dd8d](https://github.com/somaz94/helm-kustomize-lint-action/commit/ad6dd8d32990bb4dfb6a49e91e83b7aeaa88ea36))
+
+### Contributors
+
+- somaz
+
+<br/>
+
 ## [v1.1.4](https://github.com/somaz94/helm-kustomize-lint-action/compare/v1.1.3...v1.1.4) (2026-06-04)
 
 ### Bug Fixes
