@@ -2,14 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased (2026-06-25)
+## Unreleased (2026-07-23)
 
 ### Continuous Integration
 
+- remove DCO workflow ([acef979](https://github.com/somaz94/helm-kustomize-lint-action/commit/acef979eff5230de4bf3da80d3c4ccf46c53c34c))
+- adopt semantic-pr, labels, lock-threads, PR size, and auto-assign reusables ([af646bc](https://github.com/somaz94/helm-kustomize-lint-action/commit/af646bc9be6c1df9bb4d9f0cdcf45f757c83cbd4))
+- use reusable stale-issues workflow ([c1b029d](https://github.com/somaz94/helm-kustomize-lint-action/commit/c1b029de29c6917ce6796f0548f383a2d0f01978))
+- use reusable issue-greeting workflow ([ef76383](https://github.com/somaz94/helm-kustomize-lint-action/commit/ef76383f331bb23487e6d096e5e261c04dfb2e5e))
+- use reusable dependabot-auto-merge workflow ([9b454a8](https://github.com/somaz94/helm-kustomize-lint-action/commit/9b454a8079e7453ee71f977c8ee78346d79495fb))
+- use reusable contributors workflow ([7e6446f](https://github.com/somaz94/helm-kustomize-lint-action/commit/7e6446f8df59ec42f821f65bd3ca4c7da69f9bf2))
+- add ok-to-test workflow stub ([161e1ef](https://github.com/somaz94/helm-kustomize-lint-action/commit/161e1ef5fad5402aecb4292109f9efd7a100786e))
+- add PR welcome workflow stub ([cdb9200](https://github.com/somaz94/helm-kustomize-lint-action/commit/cdb9200c922b15de5c79afefd0ec50c0389259be))
 - add DCO check via shared reusable workflow ([5074fa0](https://github.com/somaz94/helm-kustomize-lint-action/commit/5074fa048c8afcc0b0d8d1ac825f767b2ebfd8d2))
 
 ### Chores
 
+- **deps:** bump actions/setup-python from 6 to 7 ([099517b](https://github.com/somaz94/helm-kustomize-lint-action/commit/099517b375629b94631fc1a29e639ef19e0e365e))
 - **deps:** bump actions/checkout from 6 to 7 (#1) ([#1](https://github.com/somaz94/helm-kustomize-lint-action/pull/1)) ([ad6dd8d](https://github.com/somaz94/helm-kustomize-lint-action/commit/ad6dd8d32990bb4dfb6a49e91e83b7aeaa88ea36))
 
 ### Contributors
